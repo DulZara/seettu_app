@@ -1,0 +1,59 @@
+# -------- OS / Editors --------
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# -------- Flutter/Dart --------
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+coverage/
+**/Generated.xcconfig
+**/Flutter.podspec
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/release/
+*.keystore
+*.jks
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Runner/GeneratedPluginRegistrant.*
+
+# macOS
+macos/Pods/
+macos/Flutter/ephemeral/
+
+# Web
+web/.dart_tool/
+web/.firebase/
+
+# -------- Node / Firebase Functions --------
+functions/node_modules/
+functions/.env
+functions/.firebase/
+.firebase/
+
+# -------- Java / Spring Boot --------
+backend/target/
+backend/.mvn/
+backend/mvnw
+backend/mvnw.cmd
+backend/.env
+*.log
+
+# -------- Other --------
+.env
+*.iml
