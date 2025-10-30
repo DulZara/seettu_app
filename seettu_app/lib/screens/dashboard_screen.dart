@@ -7,7 +7,7 @@ class DashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // TODO: bind these to real data
-    const String userName = 'John Doe';
+    const String userName = 'Dulsara Mannakkara';
     const int activeCount = 2;
     const int completedCount = 5;
 

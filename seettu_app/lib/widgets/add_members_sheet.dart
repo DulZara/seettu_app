@@ -1,14 +1,22 @@
+
+
 import 'package:flutter/material.dart';
 
 class AddMemberResult {
-  final List<String> members;
-  final bool startNow; // if true, move New → Active
+  final List<String> members; // only the extra members typed in the sheet
+  final bool startNow;
   AddMemberResult({required this.members, required this.startNow});
 }
 
 class AddMembersSheet extends StatefulWidget {
   final String seettuName;
-  const AddMembersSheet({super.key, required this.seettuName});
+  final int maxExtraMembers; // planned_users - 1 (since current user is auto-added)
+
+  const AddMembersSheet({
+    super.key,
+    required this.seettuName,
+    required this.maxExtraMembers,
+  });
 
   @override
   State<AddMembersSheet> createState() => _AddMembersSheetState();
@@ -27,6 +35,26 @@ class _AddMembersSheetState extends State<AddMembersSheet> {
   void _add() {
     final v = _controller.text.trim();
     if (v.isEmpty) return;
+
+    if (_members.length >= widget.maxExtraMembers) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Maximum members reached (${widget.maxExtraMembers}). '
+            'Organizer is already counted.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (_members.contains(v)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Already added')),
+      );
+      return;
+    }
+
     setState(() {
       _members.add(v);
       _controller.clear();
@@ -36,6 +64,8 @@ class _AddMembersSheetState extends State<AddMembersSheet> {
   @override
   Widget build(BuildContext context) {
     final radius = const Radius.circular(28);
+    final remaining = widget.maxExtraMembers - _members.length;
+
     return ClipRRect(
       borderRadius: BorderRadius.only(topLeft: radius, topRight: radius),
       child: Material(
@@ -57,20 +87,21 @@ class _AddMembersSheetState extends State<AddMembersSheet> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const SizedBox(width: 60),
-                    Text(
-                      'Add Members – ${widget.seettuName}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
+                    Text('Add Members – ${widget.seettuName}',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 4),
+                Text(
+                  'You can add up to ${widget.maxExtraMembers} more member(s). '
+                  'Organizer is already counted.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
 
                 // Input row
                 Row(
@@ -78,15 +109,18 @@ class _AddMembersSheetState extends State<AddMembersSheet> {
                     Expanded(
                       child: TextField(
                         controller: _controller,
-                        decoration: const InputDecoration(
-                          hintText: 'Phone or name',
-                          border: OutlineInputBorder(),
+                        decoration: InputDecoration(
+                          hintText: remaining > 0
+                              ? 'Phone or name (remaining $remaining)'
+                              : 'Member limit reached',
+                          border: const OutlineInputBorder(),
                         ),
+                        enabled: remaining > 0,
                         onSubmitted: (_) => _add(),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    FilledButton(onPressed: _add, child: const Text('Add')),
+                    FilledButton(onPressed: remaining > 0 ? _add : null, child: const Text('Add')),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -122,10 +156,7 @@ class _AddMembersSheetState extends State<AddMembersSheet> {
                     },
                     child: const Text(
                       'Start Seettu',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                     ),
                   ),
                 ),

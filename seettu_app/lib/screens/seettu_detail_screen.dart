@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import '../data/seettu_repository.dart';
+import '../models/seettu.dart';
 
+/// Navigation args (kept for compatibility). The screen will load live data.
 class SeettuDetailArgs {
   final String id;
   final String name;
   final int amountLkr;
-  final String frequency; // Daily/Weekly/Biweekly/Monthly
+  final String frequency; // Daily/Weekly/Biweekly/Monthly/etc
   final DateTime nextDue;
-  final List<MemberStatus> members;
+  final List<MemberStatus> members; // can be empty at first
   final bool isOrganizer;
-  final int pendingSync; // offline queued ops
+  final int pendingSync; // queued offline ops UI hint only
 
   SeettuDetailArgs({
     required this.id,
@@ -22,13 +25,25 @@ class SeettuDetailArgs {
   });
 }
 
+/// UI model for each member row in this screen
 class MemberStatus {
   final String name;
   final bool paid;
-  MemberStatus(this.name, this.paid);
+  final String? contributionId; // link to DB row in contribution table
 
-  MemberStatus copyWith({String? name, bool? paid}) =>
-      MemberStatus(name ?? this.name, paid ?? this.paid);
+  MemberStatus(this.name, this.paid, {this.contributionId});
+
+  MemberStatus copyWith({
+    String? name,
+    bool? paid,
+    String? contributionId,
+  }) {
+    return MemberStatus(
+      name ?? this.name,
+      paid ?? this.paid,
+      contributionId: contributionId ?? this.contributionId,
+    );
+  }
 }
 
 class SeettuDetailScreen extends StatefulWidget {
@@ -40,19 +55,83 @@ class SeettuDetailScreen extends StatefulWidget {
 }
 
 class _SeettuDetailScreenState extends State<SeettuDetailScreen> {
-  late List<MemberStatus> _members;
+  final _repo = SeettuRepository();
+
+  // live data
+  Seettu? _seettu;
+  String? _currentTaker;
+  List<MemberStatus> _members = [];
+
+  // ui flags
   late bool _isOrganizer;
-  late int _pending;
+  late int _pending; // just for banner
 
   @override
   void initState() {
     super.initState();
-    _members = widget.args.members.map((e) => e).toList();
     _isOrganizer = widget.args.isOrganizer;
     _pending = widget.args.pendingSync;
+    _loadAll();
   }
 
-  String _fmt(int n) {
+  Future<void> _loadAll() async {
+    final s = await _repo.getSeettuById(widget.args.id);
+    final current = await _repo.getCurrentPayerName(widget.args.id);
+
+    final contributions = await _repo.getContributionsForSeettu(widget.args.id);
+    final loadedMembers = contributions
+        .map((c) => MemberStatus(c.memberName, c.paid, contributionId: c.id))
+        .toList();
+
+    if (!mounted) return;
+    setState(() {
+      _seettu = s;
+      _currentTaker = current; // renamed label
+      _members = loadedMembers;
+    });
+  }
+
+  Future<void> _togglePaid(int index, bool value) async {
+    final m = _members[index];
+    if (m.contributionId != null) {
+      await _repo.setContributionPaid(contributionId: m.contributionId!, paid: value);
+    }
+    if (!mounted) return;
+    setState(() {
+      _members[index] = m.copyWith(paid: value);
+      _pending += 1;
+    });
+  }
+
+  Future<void> _markPayout() async {
+    if (!_canMarkPayout() || _seettu == null) return;
+    final advanced = await _repo.advanceCycle(_seettu!.id);
+    if (!mounted) return;
+
+    if (advanced) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Payout marked. Next round started.')),
+      );
+      await _loadAll(); // refresh due date, current taker and reset contributions
+      setState(() => _pending += 1);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All members must be paid before payout.')),
+      );
+    }
+  }
+
+  bool _canMarkPayout() => _members.isNotEmpty && _members.every((m) => m.paid);
+
+  double _progressPaid() {
+    if (_members.isEmpty) return 0;
+    final paidCount = _members.where((m) => m.paid).length;
+    return paidCount / _members.length;
+  }
+
+  // --- formatting helpers ---
+
+  String _fmtAmount(int n) {
     final s = n.toString();
     final b = StringBuffer();
     for (int i = 0; i < s.length; i++) {
@@ -61,6 +140,12 @@ class _SeettuDetailScreenState extends State<SeettuDetailScreen> {
       if (idx > 1 && idx % 3 == 1) b.write(',');
     }
     return b.toString();
+  }
+
+  String _formatDue(int epochMs) {
+    final d = DateTime.fromMillisecondsSinceEpoch(epochMs);
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
   String _initials(String name) {
@@ -72,212 +157,170 @@ class _SeettuDetailScreenState extends State<SeettuDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final a = widget.args;
-    final dueText = "${_month(a.nextDue.month)} ${a.nextDue.day}";
+    final s = _seettu;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Seettu'),
+        title: Text(s?.name ?? 'Seettu'),
         centerTitle: true,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _DetailBlock(
-                  title: 'Next Contribution Due',
-                  value: dueText,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _DetailBlock(
-                  title: 'Frequency',
-                  value: a.frequency,
-                  alignEnd: true,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: _DetailBlock(
-                  title: 'Amount',
-                  value: '${_fmt(a.amountLkr)} LKR',
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(child: SizedBox()),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // Progress ring + initials
-          Center(
-            child: SizedBox(
-              width: 180,
-              height: 180,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    value: _progressPaid(),
-                    strokeWidth: 8,
-                  ),
-                  Container(
-                    width: 150,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surface,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.outlineVariant.withOpacity(0.4),
+      body: s == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              children: [
+                // --- Top summary ---
+                Row(
+                  children: [
+                    Expanded(
+                      child: _DetailBlock(
+                        title: 'Next Contribution Due',
+                        value: _formatDue(s.nextDueAt),
                       ),
                     ),
-                    child: Center(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.center,
-                        children: _members
-                            .take(4)
-                            .map(
-                              (m) => CircleAvatar(
-                                radius: 20,
-                                backgroundColor: Colors.grey.shade200,
-                                child: Text(
-                                  _initials(m.name),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            )
-                            .toList(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _DetailBlock(
+                        title: 'Frequency',
+                        value: s.frequency,
+                        alignEnd: true,
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Members
-          ..._members.map((m) {
-            if (_isOrganizer) {
-              return _MemberToggleTile(
-                name: m.name,
-                value: m.paid,
-                onChanged: (v) {
-                  setState(() {
-                    final idx = _members.indexWhere((x) => x.name == m.name);
-                    _members[idx] = _members[idx].copyWith(paid: v);
-                    _pending += 1; // queued offline mutation (placeholder)
-                  });
-                },
-              );
-            } else {
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(m.name),
-                trailing: Chip(
-                  label: Text(m.paid ? 'Paid' : 'Due'),
-                  backgroundColor: m.paid
-                      ? Colors.green.withOpacity(0.15)
-                      : Colors.orange.withOpacity(0.15),
-                  labelStyle: TextStyle(
-                    color: m.paid
-                        ? Colors.green.shade800
-                        : Colors.orange.shade800,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  ],
                 ),
-              );
-            }
-          }),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _DetailBlock(
+                        title: 'Amount',
+                        value: '${_fmtAmount(s.amountLkr)} LKR',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _DetailBlock(
+                        title: 'Current Taker', // label updated
+                        value: _currentTaker ?? '—',
+                        alignEnd: true,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
 
-          const SizedBox(height: 16),
-
-          if (_isOrganizer)
-            SizedBox(
-              height: 54,
-              child: FilledButton(
-                onPressed: _canMarkPayout()
-                    ? () {
-                        setState(() => _pending += 1);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Payout marked for this cycle'),
+                // --- Progress ring ---
+                Center(
+                  child: SizedBox(
+                    width: 180,
+                    height: 180,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        CircularProgressIndicator(value: _progressPaid(), strokeWidth: 8),
+                        Container(
+                          width: 150,
+                          height: 150,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surface,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.outlineVariant.withOpacity(0.4),
+                            ),
                           ),
-                        );
-                      }
-                    : null,
-                child: const Text('Mark Payout'),
-              ),
-            ),
+                          child: Center(
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              alignment: WrapAlignment.center,
+                              children: _members.take(4).map((m) {
+                                return CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: Colors.grey.shade200,
+                                  child: Text(_initials(m.name), style: const TextStyle(fontWeight: FontWeight.w700)),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
 
-          if (_pending > 0) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber.withOpacity(0.35)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.amber),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Offline syncing\n$_pending change(s) to be synced…',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                // --- Members list ---
+                ...List.generate(_members.length, (i) {
+                  final m = _members[i];
+                  if (_isOrganizer) {
+                    return _MemberToggleTile(
+                      name: m.name,
+                      value: m.paid,
+                      onChanged: (v) => _togglePaid(i, v),
+                    );
+                  } else {
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(m.name),
+                      trailing: Chip(
+                        label: Text(m.paid ? 'Paid' : 'Due'),
+                        backgroundColor: m.paid
+                            ? Colors.green.withOpacity(0.15)
+                            : Colors.orange.withOpacity(0.15),
+                        labelStyle: TextStyle(
+                          color: m.paid ? Colors.green.shade800 : Colors.orange.shade800,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  }
+                }),
+
+                const SizedBox(height: 16),
+
+                if (_isOrganizer)
+                  SizedBox(
+                    height: 54,
+                    child: FilledButton(
+                      onPressed: _canMarkPayout() ? _markPayout : null,
+                      child: const Text('Mark Payout'),
+                    ),
+                  ),
+
+                if (_pending > 0) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.amber.withOpacity(0.35)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: Colors.amber),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Offline syncing\n$_pending change(s) to be synced…',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
-          ],
-        ],
-      ),
     );
   }
-
-  bool _canMarkPayout() => _members.isNotEmpty && _members.every((m) => m.paid);
-  double _progressPaid() => _members.isEmpty
-      ? 0
-      : _members.where((m) => m.paid).length / _members.length;
-
-  String _month(int m) {
-    const names = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return names[(m - 1).clamp(0, 11)];
-  }
 }
+
+// ---- Small sub-widgets ----
 
 class _DetailBlock extends StatelessWidget {
   final String title;
@@ -292,16 +335,15 @@ class _DetailBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final titleStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-      fontWeight: FontWeight.w600,
-    );
-    final valueStyle = Theme.of(
-      context,
-    ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800);
+          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+          fontWeight: FontWeight.w600,
+        );
+    final valueStyle = Theme.of(context).textTheme.headlineSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+        );
+
     return Column(
-      crossAxisAlignment: alignEnd
-          ? CrossAxisAlignment.end
-          : CrossAxisAlignment.start,
+      crossAxisAlignment: alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       children: [
         Text(title, style: titleStyle),
         const SizedBox(height: 6),
